@@ -41,14 +41,11 @@ pip install uv
 ### 2. Clone and Setup Project
 
 ```bash
-git clone <your-repo-url>
-cd introduction-to-mcp-with-sql-agent
+git clone https://github.com/sharansahu/mcp-sql
+cd mcp-sql
 
 # Create virtual environment and install dependencies
 uv sync
-
-# Activate virtual environment
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ```
 
 ### 3. Environment Configuration
