@@ -21,7 +21,7 @@ An AI-powered SQLite assistant built with OpenAI's GPT models and Model Context 
 
 ## 🚀 Installation
 
-### 1. Install uv (if you don't have it)
+### 1. Install uv (in case you haven't installed it yet)
 
 **macOS/Linux:**
 ```bash
