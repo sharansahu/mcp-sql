@@ -22,7 +22,7 @@ openai_client = openai.AsyncOpenAI(
 # Create server parameters for stdio connection
 server_params = StdioServerParameters(
     command="python",  # Executable
-    args=["./mcp_server.py"],  # Updated to match your server file name
+    args=["./mcp_server.py"],  # link to where the mcp server is with tools for agent
     env=None,  # Optional environment variables
 )
 
@@ -156,7 +156,6 @@ class ChatSession:
 
 # Store chat sessions (in production, use Redis or a database)
 chat_sessions = {}
-
 
 @app.route('/')
 def index():
@@ -305,4 +304,3 @@ if __name__ == '__main__':
     print("Starting SQLite Assistant Flask App...")
     print("Access the web interface at: http://localhost:10000")
     app.run(debug=True, host='0.0.0.0', port=10000)
-    

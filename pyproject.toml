@@ -1,7 +1,7 @@
 [project]
-name = "introduction-to-mcp-with-sql-agent"
+name = "mcp-with-sql-agent"
 version = "0.1.0"
-description = "Add your description here"
+description = "SQLite assistant built with OpenAI's GPT models and Model Context Protocol (MCP)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
