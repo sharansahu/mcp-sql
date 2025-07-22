@@ -15,7 +15,6 @@ load_dotenv()
 
 app = Flask(__name__, static_folder='static', template_folder='static')
 
-# Initialize OpenAI client with API key from environment
 openai_client = openai.AsyncOpenAI(
     api_key=os.getenv("OPENAI_API_KEY")
 )
@@ -80,7 +79,6 @@ class ChatSession:
                 for tool in response.tools
             ]
 
-            # Add system message if this is the first message
             if not self.messages:
                 self.messages.append({"role": "system", "content": self.system_prompt})
 
@@ -105,17 +103,15 @@ class ChatSession:
 
                 assistant_message = res.choices[0].message
                 
-                # Handle text response
                 if assistant_message.content:
                     response_text = assistant_message.content
                     self.messages.append({"role": "assistant", "content": assistant_message.content})
 
                 # Handle tool calls
                 if assistant_message.tool_calls:
-                    # Add assistant message with tool calls (even if content is empty)
                     self.messages.append({
                         "role": "assistant", 
-                        "content": assistant_message.content or "",  # Ensure content is not None
+                        "content": assistant_message.content or "", 
                         "tool_calls": [
                             {
                                 "id": tool_call.id,
@@ -140,7 +136,6 @@ class ChatSession:
                         # Execute tool call
                         result = await session.call_tool(tool_name, cast(dict, tool_args))
                         
-                        # Get the result content
                         result_content = ""
                         if result.content and len(result.content) > 0:
                             result_content = getattr(result.content[0], "text", "")
@@ -190,7 +185,7 @@ class ChatSession:
                 else:
                     response_text = "I apologize, but I'm having trouble generating a response. Please try rephrasing your question."
 
-            # Return format expected by your JavaScript
+            # Return format 
             return {
                 "status": "success",
                 "result": response_text,
@@ -198,7 +193,7 @@ class ChatSession:
             }
 
         except Exception as e:
-            # Return error format expected by your JavaScript
+            # Return error format 
             return {
                 "status": "error",
                 "message": str(e),
@@ -234,26 +229,23 @@ def query():
             "message": "Empty query"
         }), 400
     
-    # Get or create chat session
     if session_id not in chat_sessions:
         chat_sessions[session_id] = ChatSession(session_id=session_id)
     
     chat_session = chat_sessions[session_id]
     
-    # Process query asynchronously
     async def process_async():
         async with stdio_client(server_params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 return await chat_session.process_query(session, query_text)
     
-    # Run async function
     try:
         result = asyncio.run(process_async())
-        print(f"Query result: {result}")  # Better logging
+        print(f"Query result: {result}") 
         return jsonify(result)
     except Exception as e:
-        print(f"Error processing query: {str(e)}")  # Better error logging
+        print(f"Error processing query: {str(e)}")  
         return jsonify({
             "status": "error",
             "message": f"Server error: {str(e)}"
@@ -274,23 +266,19 @@ def chat():
     if not query_text:
         return jsonify({"error": "Empty query"}), 400
     
-    # Get or create chat session
     if session_id not in chat_sessions:
         chat_sessions[session_id] = ChatSession(session_id=session_id)
     
     chat_session = chat_sessions[session_id]
     
-    # Process query asynchronously
     async def process_async():
         async with stdio_client(server_params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 return await chat_session.process_query(session, query_text)
     
-    # Run async function
     try:
         result = asyncio.run(process_async())
-        # Convert to the format expected by the other frontend
         if result["status"] == "success":
             return jsonify({
                 "success": True,
@@ -349,7 +337,6 @@ def health_check():
 
 
 if __name__ == '__main__':
-    # Check if required environment variables are set
     if not os.getenv("OPENAI_API_KEY"):
         print("Error: OPENAI_API_KEY not found in environment variables")
         print("Please set your OpenAI API key in your .env file")

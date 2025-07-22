@@ -132,7 +132,7 @@ def describe_table(table_name: str) -> str:
         conn = cx_Oracle.connect(**db_config)
         cursor = conn.cursor()
         
-        # Check if table exists (Oracle table names are typically uppercase)
+        # Check if table exists
         table_name_upper = table_name.upper()
         check_query = "SELECT table_name FROM user_tables WHERE table_name = :1"
         cursor.execute(check_query, (table_name_upper,))
