@@ -2,6 +2,10 @@
 
 An AI-powered multi-database assistant built with OpenAI's GPT models and Model Context Protocol (MCP). This project demonstrates how to create an intelligent database query interface that can understand natural language requests and execute SQL queries with full schema awareness across MySQL, Oracle, and SQLite databases.
 
+<a href="https://glama.ai/mcp/servers/@sharansahu/mcp-sql">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@sharansahu/mcp-sql/badge" alt="SQL Agent MCP server" />
+</a>
+
 ## 🌟 Key Features
 
 - **🤖 AI-Powered SQL Assistant** - Natural language to SQL query conversion using OpenAI GPT-4o
