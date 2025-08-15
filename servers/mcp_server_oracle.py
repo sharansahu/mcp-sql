@@ -289,17 +289,87 @@ def search_tables(keyword: str) -> str:
 def database_context() -> str:
     """Provides context about the database schema for the AI assistant"""
     return f"""Database Context:
-
++)
 {get_database_schema()}
 
 Instructions for querying:
-1. Always use get_schema() or list_tables() first to understand the database structure
-2. Use describe_table(table_name) to get detailed information about specific tables
-3. Use search_tables(keyword) to find tables or columns related to specific concepts
-4. When writing SQL queries, make sure to reference the correct table and column names
-5. Always validate table and column names exist before writing complex queries
-6. Oracle table and column names are case-sensitive and typically stored in uppercase
-7. Use ROWNUM for limiting results instead of LIMIT
+1) Start with get_schema() or list_tables() to understand the overall structure.
+2) Use describe_table(table_name) to confirm column names and data types.
+3) Use search_tables(keyword) to locate relevant tables/columns.
+4) When writing SQL for query_data(sql), ALWAYS:
+   - Use bind variables (no string concatenation of user input).
+   - Prefer LIKE for substring/partial text; reserve '=' for explicit exact IDs (numeric ID, UUID, exact code).
+   - Make string filters case-insensitive (UPPER(...) on both sides OR use a case-insensitive NLS_SORT/COMP session if explicitly set).
+   - Normalize Unicode spaces/dashes and collapse whitespace before filtering.
+   - Escape '%' and '_' in user terms and specify an ESCAPE character.
+
+Identifier casing (Oracle):
+- Unquoted identifiers are stored UPPERCASE and are case-insensitive.
+- Case-sensitive identifiers only exist if created with double quotes; then you MUST reference them with the exact case and quotes.
+- Avoid creating/depending on quoted identifiers; if they exist, use "ExactCaseName".
+
+Result limiting and ordering:
+- Prefer FETCH FIRST n ROWS ONLY (Oracle 12c+). Example: ... ORDER BY ... FETCH FIRST 20 ROWS ONLY
+- If you must use ROWNUM with ORDER BY, wrap the ordered subquery:
+    SELECT * FROM (SELECT ... FROM ... ORDER BY ...) WHERE ROWNUM <= :n
+
+TEXT MATCHING POLICY (CRITICAL):
+- Default to LIKE for partial text:
+    -- contains:
+       UPPER({{col_norm}}) LIKE UPPER('%' || :term_esc || '%') ESCAPE '\\'
+    -- starts with:
+       UPPER({{col_norm}}) LIKE UPPER(:term_esc || '%') ESCAPE '\\'
+    -- ends with:
+       UPPER({{col_norm}}) LIKE UPPER('%' || :term_esc) ESCAPE '\\'
+- Exact '=' ONLY for explicit exact-match requests or true unique identifiers.
+
+LIKE wildcard escaping (bind-side):
+- Always escape user wildcards inside SQL using bind operations:
+    -- :term_esc := REPLACE(REPLACE(:raw_term, '%', '\\%'), '_', '\\_')
+  Then use ESCAPE '\\' in the predicate.
+
+Unicode & punctuation normalization (use in predicates or via function-based index):
+- Define a normalized expression per filtered column to survive NBSPs, narrow NBSPs, and fancy dashes, and to collapse whitespace:
+    -- {{col_norm}} :=
+       REGEXP_REPLACE(
+         REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(col,
+           CHR(160),' '),            -- NBSP U+00A0
+           UNISTR('\\202F'),' '),    -- narrow NBSP U+202F
+           UNISTR('\\2011'),'-'),    -- non-breaking hyphen
+           UNISTR('\\2013'),'-'),    -- en dash
+           UNISTR('\\2014'),'-'      -- em dash
+         ),
+         '\\s+', ' '                 -- collapse whitespace
+       )
+- Always apply LIKE to {{col_norm}}, not the raw column.
+
+Common field normalization patterns:
+- Treat 'None'/'N/A'/'' as NULL: NULLIF(TRIM({col}), 'None')
+- Booleans (e.g., 'Yes, (HLC [...])'):
+    CASE
+      WHEN REGEXP_LIKE(UPPER(flag), '^\\s*Y(ES)?\\b') THEN 1
+      WHEN REGEXP_LIKE(UPPER(flag), '^\\s*N(O)?\\b')  THEN 0
+      ELSE NULL
+    END
+- Numeric price from '$250 ':
+    TO_NUMBER(REGEXP_SUBSTR(price_col, '[0-9]+(\\.[0-9]+)?'))
+- Hours/CEUs from '~4–6 hours (1 CEU)':
+    -- low hours:  REGEXP_SUBSTR(dur_col, '([0-9]+(\\.[0-9]+)?)', 1, 1, NULL, 1)
+    -- high hours: REGEXP_SUBSTR(dur_col, '([0-9]+(\\.[0-9]+)?)', 1, 2, NULL, 1)
+    -- CEUs:       REGEXP_SUBSTR(dur_col, '([0-9]+(\\.[0-9]+)?)\\s*CEU', 1, 1, NULL, 1)
+
+Zero-results recovery:
+1) Re-check table/column names & data types via describe_table().
+2) Switch '=' to LIKE over {{col_norm}} with case-insensitivity and escaped term.
+3) Search across multiple plausible columns (institution, campus, state, title, roles).
+4) Sample rows with FETCH FIRST n ROWS ONLY to validate coverage and spot formatting anomalies.
+5) If still empty, broaden terms, verify hidden NBSP/dash issues, and consider full-text (Oracle Text).
+
+Performance & indexing (Oracle):
+- Prefer "starts with" patterns (no leading '%') to enable index usage.
+- Create function-based indexes on UPPER({{col_norm}}) when frequent text filtering is expected.
+- Consider Oracle Text (CONTEXT/CTXCAT) and CONTAINS(...) for multi-word or relevance-ranked search.
+- Use EXPLAIN PLAN / DBMS_XPLAN to confirm index usage.
 
 Available tools:
 - get_schema(): Get complete database schema

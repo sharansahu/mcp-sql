@@ -39,30 +39,185 @@ server_params = StdioServerParameters(
     env=None,  # Optional environment variables
 )
 
+DB_RULES = {
+    DatabaseType.ORACLE: {
+        "DIALECT": "ORACLE",
+        "IDENTIFIER_NOTE": (
+            "- Unquoted identifiers are stored UPPERCASE and case-insensitive.\n"
+            "- Quoted identifiers are case-sensitive and must be referenced with quotes."
+        ),
+        "LIMIT_HINT": (
+            "Preferred (12c+): ... ORDER BY ... FETCH FIRST :n ROWS ONLY\n"
+            "Legacy with ORDER BY: SELECT * FROM (SELECT ... FROM ... ORDER BY ...) WHERE ROWNUM <= :n"
+        ),
+        "LIKE_CONTAINS": "UPPER({col_norm}) LIKE UPPER('%' || :term_esc || '%') ESCAPE '\\\\'",
+        "LIKE_PREFIX":   "UPPER({col_norm}) LIKE UPPER(:term_esc || '%') ESCAPE '\\\\'",
+        "LIKE_SUFFIX":   "UPPER({col_norm}) LIKE UPPER('%' || :term_esc) ESCAPE '\\\\'",
+        "ESCAPE_BIND":   ":term_esc := REPLACE(REPLACE(:raw_term, '%', '\\\\%'), '_', '\\\\_')",
+        "NORMALIZER": (
+            "REGEXP_REPLACE("
+            "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE({col},"
+            "CHR(160),' '),UNISTR('\\\\202F'),' '),UNISTR('\\\\2011'),'-'),UNISTR('\\\\2013'),'-'),UNISTR('\\\\2014'),'-'),"
+            "'\\\\s+',' '"
+            ")"
+        ),
+        "EXTRACT_PRICE":  "TO_NUMBER(REGEXP_SUBSTR({price_col}, '[0-9]+(\\.[0-9]+)?'))",
+        "EXTRACT_HOURS1": "REGEXP_SUBSTR({dur_col}, '([0-9]+(\\.[0-9]+)?)', 1, 1, NULL, 1)",
+        "EXTRACT_HOURS2": "REGEXP_SUBSTR({dur_col}, '([0-9]+(\\.[0-9]+)?)', 1, 2, NULL, 1)",
+        "EXTRACT_CEU":    "REGEXP_SUBSTR({dur_col}, '([0-9]+(\\.[0-9]+)?)\\s*CEU', 1, 1, NULL, 1)",
+        "BOOL_CASE": (
+            "CASE WHEN REGEXP_LIKE(UPPER({flag}), '^\\s*Y(ES)?\\b') THEN 1 "
+            "WHEN REGEXP_LIKE(UPPER({flag}), '^\\s*N(O)?\\b') THEN 0 ELSE NULL END"
+        ),
+        "NULLIF_EX": "NULLIF(TRIM({col}), 'None')",
+        "FULLTEXT_HINT": "Consider Oracle Text (CONTEXT/CTXCAT) and CONTAINS(...) for multi-word search.",
+        "IDENT_QUOTE": '"',  # Oracle quoted identifiers
+    },
+    DatabaseType.MYSQL: {
+        "DIALECT": "MYSQL",
+        "IDENTIFIER_NOTE": (
+            "- Use backticks for identifiers with special characters: `table`, `column`."
+        ),
+        "LIMIT_HINT": "Use LIMIT :n [OFFSET :k]",
+        "LIKE_CONTAINS": "{col_norm} COLLATE utf8mb4_0900_ai_ci LIKE CONCAT('%', :term_esc, '%')",
+        "LIKE_PREFIX":   "{col_norm} COLLATE utf8mb4_0900_ai_ci LIKE CONCAT(:term_esc, '%')",
+        "LIKE_SUFFIX":   "{col_norm} COLLATE utf8mb4_0900_ai_ci LIKE CONCAT('%', :term_esc)",
+        "ESCAPE_BIND":   ":term_esc := REPLACE(REPLACE(REPLACE(:raw_term, '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_')",
+        "NORMALIZER": (
+            "REGEXP_REPLACE("
+            "REGEXP_REPLACE("
+            "REGEXP_REPLACE({col}, '[\\x{{00A0}}\\x{{202F}}]', ' '),"
+            "'[\\x{{2010}}-\\x{{2015}}]', '-'"
+            "),"
+            "'[[:space:]]+', ' '"
+            ")"
+        ),
+        "EXTRACT_PRICE":  "CAST(REGEXP_SUBSTR({price_col}, '[0-9]+(\\.[0-9]+)?') AS DECIMAL(10,2))",
+        "EXTRACT_HOURS1": "REGEXP_SUBSTR({dur_col}, '([0-9]+(\\.[0-9]+)?)', 1, 1)",
+        "EXTRACT_HOURS2": "REGEXP_SUBSTR({dur_col}, '([0-9]+(\\.[0-9]+)?)', 1, 2)",
+        "EXTRACT_CEU":    "REGEXP_SUBSTR({dur_col}, '([0-9]+(\\.[0-9]+)?)\\s*CEU', 1, 1)",
+        "BOOL_CASE": (
+            "CASE WHEN REGEXP_LIKE(UPPER({flag}), '^\\s*Y(ES)?\\b') THEN 1 "
+            "WHEN REGEXP_LIKE(UPPER({flag}), '^\\s*N(O)?\\b') THEN 0 ELSE NULL END"
+        ),
+        "NULLIF_EX": "NULLIF(TRIM({col}), 'None')",
+        "FULLTEXT_HINT": "Consider MySQL FULLTEXT (IN NATURAL LANGUAGE MODE) for multi-word search.",
+        "IDENT_QUOTE": '`',  # MySQL quoted identifiers
+    },
+    DatabaseType.SQLITE: {
+        "DIALECT": "SQLITE",
+        "IDENTIFIER_NOTE": "- Identifiers may be quoted with double quotes or backticks; case-insensitive by default.",
+        "LIMIT_HINT": "Use LIMIT :n OFFSET :k",
+        "LIKE_CONTAINS": "UPPER({col_norm}) LIKE UPPER('%' || :term_esc || '%') ESCAPE '\\\\'",
+        "LIKE_PREFIX":   "UPPER({col_norm}) LIKE UPPER(:term_esc || '%') ESCAPE '\\\\'",
+        "LIKE_SUFFIX":   "UPPER({col_norm}) LIKE UPPER('%' || :term_esc) ESCAPE '\\\\'",
+        "ESCAPE_BIND":   ":term_esc := REPLACE(REPLACE(:raw_term, '%', '\\\\%'), '_', '\\\\_')",
+        # SQLite lacks REGEXP_REPLACE by default; use REPLACE chain as a minimal fallback.
+        "NORMALIZER": (
+            "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE({col},"
+            "CHAR(160),' '),X'202F',' '),X'2011','-'),X'2013','-'),X'2014','-')"
+        ),
+        "EXTRACT_PRICE":  "CAST(REPLACE(REPLACE({price_col}, '$',''), ',', '') AS REAL)",
+        "EXTRACT_HOURS1": "NULL",  # left as placeholder unless a regexp extension is loaded
+        "EXTRACT_HOURS2": "NULL",
+        "EXTRACT_CEU":    "NULL",
+        "BOOL_CASE": (
+            "CASE WHEN UPPER({flag}) LIKE 'Y%' THEN 1 "
+            "WHEN UPPER({flag}) LIKE 'N%' THEN 0 ELSE NULL END"
+        ),
+        "NULLIF_EX": "NULLIF(TRIM({col}), 'None')",
+        "FULLTEXT_HINT": "Consider FTS5 for full-text search.",
+        "IDENT_QUOTE": '"',
+    }
+}
+
+def make_system_prompt(db: DatabaseType) -> str:
+    r = DB_RULES[db]
+    # Convenience locals for formatting a readable prompt
+    LIKE_CONTAINS = r["LIKE_CONTAINS"].format(col_norm="col_norm")
+    LIKE_PREFIX   = r["LIKE_PREFIX"].format(col_norm="col_norm")
+    LIKE_SUFFIX   = r["LIKE_SUFFIX"].format(col_norm="col_norm")
+    NORMALIZER_EX = r["NORMALIZER"].format(col="col")
+    return f"""You are a master database assistant with access to database tools.
+
+    DIALECT: {r['DIALECT']}  (rules and examples below MUST be followed exactly)
+
+    CRITICAL: You MUST use the available tools to interact with the database. Never make assumptions about data without querying first.
+
+    MANDATORY WORKFLOW:
+    1) ALWAYS start with get_schema() or list_tables() to understand the database structure.
+    2) If the user asks about specific data, use describe_table() to inspect columns and types.
+    3) Use search_tables() to find relevant tables/columns for the user’s question.
+    4) THEN write and execute SQL with query_data().
+
+    IMPORTANT RULES:
+    - Never guess table or column names—verify via the schema tools.
+    - Always use the tools, even for simple questions; the schema may surprise you.
+    - If a query returns no results, double-check names/types, then try alternative strategies.
+    - Be explicit about your actions: “Let me first check the database structure…”
+    - ALWAYS respond to the user, even if it’s an explanation of what you’re doing.
+
+    IDENTIFIER RULES:
+    {r['IDENTIFIER_NOTE']}
+
+    RESULT LIMITING:
+    {r['LIMIT_HINT']}
+
+    TEXT MATCHING POLICY (CRITICAL):
+    - Default: For any substring/partial text intent (“contains”, “includes”, starts/ends with, unknown casing, or when “=” returned 0 rows), use LIKE, not “=”.
+    - Exact matches: Use “=” ONLY if the user explicitly requests exact or when matching true unique identifiers (numeric ID, UUID, exact code).
+    - Case-insensitive: Use UPPER() or, where applicable, a case-insensitive collation/session setting. Always bind parameters—never concatenate user input.
+    - Escape user wildcards. Bind-side escaping:
+    {r['ESCAPE_BIND']}
+    - LIKE templates for this dialect:
+    • contains:    {LIKE_CONTAINS}
+    • starts with: {LIKE_PREFIX}
+    • ends with:   {LIKE_SUFFIX}
+
+    UNICODE & PUNCTUATION NORMALIZATION (ON-THE-FLY):
+    - Define a normalized expression col_norm that:
+    1) replaces NBSP (U+00A0) and narrow NBSP (U+202F) with regular space,
+    2) unifies hyphen/dash variants (U+2010–U+2015) to '-',
+    3) collapses repeated whitespace to a single space.
+    - Use this dialect-specific example (adapt column name):
+    {NORMALIZER_EX}
+    - Always apply LIKE against col_norm, not the raw column.
+
+    DATA NORMALIZATION POLICY (DEFENSIVE):
+    - Treat “None”, “N/A”, “NA”, and empty string as NULL, e.g., {r['NULLIF_EX'].format(col='col')}.
+    - Booleans: Normalize “Yes/No” variants, e.g., {r['BOOL_CASE'].format(flag='flag_col')}.
+    - Money: Extract numeric price, e.g., {r['EXTRACT_PRICE'].format(price_col='price_col')}.
+    - Durations/CEUs (if supported): low hours {r['EXTRACT_HOURS1'].format(dur_col='dur_col')}, high hours {r['EXTRACT_HOURS2'].format(dur_col='dur_col')}, CEUs {r['EXTRACT_CEU'].format(dur_col='dur_col')}.
+
+    ZERO-RESULTS RECOVERY:
+    1) Verify table/column names and data types via describe_table().
+    2) Switch equality to LIKE with normalization and case-insensitivity.
+    3) Widen the search to multiple relevant columns (e.g., institution, program_title, roles).
+    4) If still empty: check for NBSP/fancy hyphens/trailing spaces/embedded markup; re-run with col_norm.
+    5) Offer alternative queries (synonyms, broader terms) and show a few sample rows to sanity-check data coverage.
+
+    PERFORMANCE & INDEXING:
+    - Prefer “starts with” patterns (no leading ‘%’) to enable index usage.
+    - Use function-based/functional indexes on UPPER(col_norm) where frequent text filtering is expected.
+    - {r['FULLTEXT_HINT']}
+    - Limit sample outputs during exploration to avoid scanning entire tables.
+
+    SAFETY:
+    - Always use bind parameters.
+    - Never leak raw user input into SQL.
+    - Document your ESCAPE character when used.
+
+    Your job is to use the available database tools to answer user questions accurately. Always use tools—never provide answers without querying first.
+    """
+
+SYSTEM_PROMPT = make_system_prompt(db_type)
+
 @dataclass
 class ChatSession:
     messages: list[dict] = field(default_factory=list)
     session_id: str = ""
 
-    system_prompt: str = """You are a master database assistant with access to database tools.
-
-    CRITICAL: You MUST use the available tools to interact with the database. Never make assumptions about data without querying first.
-
-    MANDATORY WORKFLOW:
-    1. ALWAYS start by calling get_schema() or list_tables() to understand the database structure
-    2. If the user asks about specific data, use describe_table() to understand table structure
-    3. Use search_tables() to find relevant tables/columns for the user's question
-    4. THEN write and execute SQL queries using query_data()
-
-    IMPORTANT RULES:
-    - Never guess table or column names - always verify them first using the schema tools
-    - Always use the tools even for simple questions - the database structure may not be what you expect
-    - If a query returns no results, double-check the table/column names and try alternative approaches
-    - Be explicit about what you're doing: "Let me first check the database structure..."
-    - ALWAYS provide a response to the user, even if it's just explaining what you're doing
-
-    Your job is to use the available database tools to answer user questions accurately. Always use tools - never provide answers without querying the database first.
-    """
+    system_prompt: str = SYSTEM_PROMPT
 
     async def process_query(self, session: ClientSession, query: str) -> dict:
         try:

@@ -274,23 +274,103 @@ def database_context() -> str:
     """Provides context about the database schema for the AI assistant"""
     return f"""Database Context:
 
-{get_database_schema()}
+    {get_database_schema()}
 
-Instructions for querying:
-1. Always use get_schema() or list_tables() first to understand the database structure
-2. Use describe_table(table_name) to get detailed information about specific tables
-3. Use search_tables(keyword) to find tables or columns related to specific concepts
-4. When writing SQL queries, make sure to reference the correct table and column names
-5. Always validate table and column names exist before writing complex queries
-6. Use backticks around table/column names if they contain special characters
+    Instructions for querying:
+    1) Start with get_schema() or list_tables() to view the overall structure.
+    2) Use describe_table(table_name) to confirm column names and data types.
+    3) Use search_tables(keyword) to locate relevant tables/columns.
+    4) When writing SQL for query_data(sql), ALWAYS:
+    - Use parameterized queries (bind variables). Do NOT concatenate user input.
+    - Prefer LIKE over '=' for any substring/partial text intent; reserve '=' for true exact IDs.
+    - Normalize text (Unicode spaces/dashes & collapsed whitespace) **before** filtering.
+    - Escape user-supplied '%', '_' and '\\' for LIKE patterns.
+    - Force case/diacritic-insensitive comparison with an appropriate collation.
 
-Available tools:
-- get_schema(): Get complete database schema
-- list_tables(): List all available tables
-- describe_table(table_name): Get detailed table information
-- search_tables(keyword): Search for tables/columns by keyword
-- query_data(sql): Execute SQL queries
-"""
+    Text matching policy (CRITICAL):
+    - Default to LIKE for partial text:
+        -- contains
+        {{col_norm}} COLLATE utf8mb4_0900_ai_ci LIKE CONCAT('%', {{term_esc}}, '%')
+        -- starts with
+        {{col_norm}} COLLATE utf8mb4_0900_ai_ci LIKE CONCAT({{term_esc}}, '%')
+        -- ends with
+        {{col_norm}} COLLATE utf8mb4_0900_ai_ci LIKE CONCAT('%', {{term_esc}})
+    - Use '=' ONLY for explicit exact-match requests or unique identifiers (numeric IDs, UUIDs, exact codes).
+
+    LIKE wildcard escaping (MySQL):
+    - MySQL uses '\\' as the LIKE escape (unless NO_BACKSLASH_ESCAPES is set).
+    - Always transform the bound term inside SQL (so prepared statements stay safe):
+        -- term_esc := REPLACE(REPLACE(REPLACE(?, '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_')
+    Example usage:
+        WHERE {{col_norm}} COLLATE utf8mb4_0900_ai_ci LIKE CONCAT('%', term_esc, '%')
+    - Ensure NO_BACKSLASH_ESCAPES is **not** enabled for the session when relying on '\\' escapes.
+
+    Unicode & punctuation normalization (define once per filtered column):
+    - Normalize to a stable form **in the predicate** (or via a generated column) to survive NBSPs, narrow NBSPs, and fancy dashes, and to collapse whitespace:
+        -- col_norm :=
+        REGEXP_REPLACE(                                      -- collapse all whitespace to single space
+            REGEXP_REPLACE(                                    -- unify dashes/hyphens to '-'
+            REGEXP_REPLACE(col, '[\\x{{00A0}}\\x{{202F}}]', ' '),   -- NBSP, narrow NBSP -> space
+            '[\\x{{2010}}-\\x{{2015}}]', '-'
+            ),
+            '[[:space:]]+', ' '
+        )
+    - Always apply LIKE to col_norm, not the raw column.
+
+    Handling common field types in your dataset:
+    - Booleans like 'Yes, (HLC [Higher Learning Commission])':
+        CASE
+        WHEN REGEXP_LIKE(UPPER(col)), '^\\s*Y(ES)?\\b') THEN 1
+        WHEN REGEXP_LIKE(UPPER(col), '^\\s*N(O)?\\b')  THEN 0
+        ELSE NULL
+        END
+    - Numeric price from strings like '$250 ':
+        CAST(REGEXP_SUBSTR(price_col, '[0-9]+(\\.[0-9]+)?') AS DECIMAL(10,2))
+    - Hours/CEUs from strings like '~4–6 hours (1 CEU)':
+        -- low hours:  REGEXP_SUBSTR(dur_col, '([0-9]+(\\.[0-9]+)?)', 1, 1)
+        -- high hours: REGEXP_SUBSTR(dur_col, '([0-9]+(\\.[0-9]+)?)', 1, 2)
+        -- CEUs:       REGEXP_SUBSTR(dur_col, '([0-9]+(\\.[0-9]+)?)\\s*CEU', 1, 1)
+
+    Zero-results recovery:
+    1) Re-check table/column names & types via describe_table().
+    2) Switch '=' to LIKE over col_norm with proper escaping & case-insensitive collation.
+    3) Search across multiple plausible columns (institution, campus, state, title, roles).
+    4) Sample rows (e.g., LIMIT 20) to validate coverage and spot formatting anomalies.
+    5) If still empty, broaden terms, remove leading/trailing punctuation, and verify session SQL mode (NO_BACKSLASH_ESCAPES).
+
+    Performance tips (MySQL 8):
+    - Prefer "starts with" (no leading '%') to enable index usage.
+    - Create a functional index or generated column for normalization:
+        -- Example generated column & index:
+        ALTER TABLE t
+        ADD COLUMN col_norm_gen VARCHAR(1024)
+            GENERATED ALWAYS AS (
+            REGEXP_REPLACE(
+                REGEXP_REPLACE(
+                REGEXP_REPLACE(col, '[\\x{{00A0}}\\x{{202F}}]', ' '),
+                '[\\x{{2010}}-\\x{{2015}}]', '-'
+                ),
+                '[[:space:]]+', ' '
+            )
+            ) STORED,
+        ADD INDEX idx_col_norm (col_norm_gen);
+    Then filter on UPPER(col_norm_gen) or with COLLATE utf8mb4_0900_ai_ci.
+    - Use EXPLAIN to confirm index usage; avoid leading '%' unless necessary.
+
+    Conventions:
+    - Use backticks for identifiers with special characters: `table`, `column`.
+    - LIMIT result size for exploratory queries.
+    - Always narrate steps briefly so the user understands what you’re checking and why.
+
+    Available tools:
+    - get_schema(): Get complete database schema
+    - list_tables(): List all available tables
+    - describe_table(table_name): Get detailed table information
+    - search_tables(keyword): Search for tables/columns by keyword
+    - query_data(sql): Execute SQL queries
+    """
+
+
 
 @mcp.prompt()
 def example_prompt(code: str) -> str:
